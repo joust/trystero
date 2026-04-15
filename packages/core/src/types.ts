@@ -58,6 +58,7 @@ export type BaseRoomConfig = {
   rtcPolyfill?: typeof RTCPeerConnection
   turnConfig?: TurnServerConfig[]
   maxPeers?: number
+  iceReconnect?: boolean
   _test_only_mdnsHostFallbackToLoopback?: boolean
   _test_only_sharedPeerIdleMs?: number
 }

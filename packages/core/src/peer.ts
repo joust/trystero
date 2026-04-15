@@ -23,9 +23,11 @@ export default (
     rtcConfig,
     rtcPolyfill,
     turnConfig,
+    iceReconnect,
     _test_only_mdnsHostFallbackToLoopback
   }: BaseRoomConfig
 ): PeerHandle => {
+  const iceReconnectEnabled = Boolean(iceReconnect)
   const pc = new (rtcPolyfill ?? RTCPeerConnection)({
     iceServers: defaultIceServers.concat(turnConfig ?? []),
     ...rtcConfig
@@ -43,6 +45,7 @@ export default (
   let dataChannel: RTCDataChannel | null = null
   let disconnectedCloseTimer: number | null = null
   let didEmitClose = false
+  let hasEverConnected = false
 
   const clearDisconnectedCloseTimer = (): null =>
     (disconnectedCloseTimer = resetTimer(disconnectedCloseTimer))
@@ -335,17 +338,42 @@ export default (
       sdp: JSON.stringify(candidatePayload)
     })
   }
+  const tryIceReconnect = (): boolean => {
+    if (
+      !iceReconnectEnabled ||
+      !hasEverConnected ||
+      didEmitClose ||
+      typeof pc.restartIce !== 'function' ||
+      pc.connectionState === 'closed'
+    ) {
+      return false
+    }
+
+    try {
+      pc.restartIce()
+      return true
+    } catch (err) {
+      handlers.error?.(toError(err, 'ICE restart failed'))
+      return false
+    }
+  }
+
   pc.onconnectionstatechange = () => {
     if (
       pc.connectionState === 'connected' ||
       pc.connectionState === 'connecting'
     ) {
       clearDisconnectedCloseTimer()
+      if (pc.connectionState === 'connected') {
+        hasEverConnected = true
+      }
       return
     }
 
     if (pc.connectionState === 'disconnected') {
       if (!disconnectedCloseTimer) {
+        tryIceReconnect()
+
         disconnectedCloseTimer = setTimeout(() => {
           disconnectedCloseTimer = null
 
@@ -358,7 +386,16 @@ export default (
       return
     }
 
-    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+    if (pc.connectionState === 'failed') {
+      if (tryIceReconnect()) {
+        return
+      }
+
+      emitClose()
+      return
+    }
+
+    if (pc.connectionState === 'closed') {
       emitClose()
     }
   }
