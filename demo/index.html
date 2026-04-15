@@ -184,12 +184,36 @@
     </section>
 
     <section>
+      <h2>5. App-level resumable transfer (bonus)</h2>
+      <p>
+        Not part of trystero itself — a thin helper on top. Splits a file into
+        64 KB logical chunks, exchanges a manifest, then sends only the chunks
+        the receiver doesn't have yet. Abort mid-send, then click
+        <b>resume</b> — only the gap chunks are re-sent.
+      </p>
+      <label>size (MB): <input type="number" id="fsize" value="2" /></label>
+      <button id="btn-ft-send">send file</button>
+      <button id="btn-ft-abort">abort</button>
+      <button id="btn-ft-resume">resume</button>
+      <button id="btn-ft-drop">drop receiver buffer</button>
+      <div>
+        sender: <span id="ftsp">idle</span>
+        <div class="bar"><div id="ftsbar"></div></div>
+      </div>
+      <div>
+        receiver: <span id="ftrp">idle</span>
+        <div class="bar"><div id="ftrbar"></div></div>
+      </div>
+    </section>
+
+    <section>
       <h2>Log</h2>
       <div id="log"></div>
     </section>
 
     <script type="module">
       import {joinRoom, selfId} from '../dist/trystero-nostr.min.js'
+      import {createFileTransfer} from './file-transfer.mjs'
 
       const $ = id => document.getElementById(id)
       const log = (msg, cls = '') => {
@@ -328,14 +352,69 @@
         pc.close()
       }
 
+      const ft = createFileTransfer(room)
+
+      const currentFileId = 'demo-file-1'
+
+      ft.onProgress(({direction, fileId, peerId, sent, total}) => {
+        const pct = Math.round((sent / total) * 100)
+        if (direction === 'send') {
+          $('ftsp').textContent = `${sent}/${total} chunks → ${peerId} (${pct}%)`
+          $('ftsbar').style.width = `${pct}%`
+        } else {
+          $('ftrp').textContent = `${sent}/${total} chunks ← ${peerId} (${pct}%)`
+          $('ftrbar').style.width = `${pct}%`
+        }
+      })
+
+      ft.onFile(({fileId, name, blob, peerId}) => {
+        log(
+          `received complete file "${name}" from ${peerId}: ${blob.size} bytes`,
+          'ok'
+        )
+      })
+
+      $('btn-ft-send').onclick = async () => {
+        const mb = Number($('fsize').value) || 2
+        const buf = new ArrayBuffer(mb * 1024 * 1024)
+        new Uint8Array(buf).fill(0xab)
+        log(`file send: ${mb} MB as ${currentFileId}`, 'info')
+        try {
+          await ft.send(currentFileId, `demo-${mb}mb.bin`, buf)
+          log(`file send complete: ${currentFileId}`, 'ok')
+        } catch (e) {
+          log(`file send error: ${e.message}`, 'err')
+        }
+      }
+
+      $('btn-ft-abort').onclick = () => {
+        ft.abort(currentFileId)
+        log(`aborted send of ${currentFileId}`, 'warn')
+      }
+
+      $('btn-ft-resume').onclick = async () => {
+        const mb = Number($('fsize').value) || 2
+        const buf = new ArrayBuffer(mb * 1024 * 1024)
+        new Uint8Array(buf).fill(0xab)
+        log(`resuming ${currentFileId}: only missing chunks will go`, 'info')
+        try {
+          await ft.send(currentFileId, `demo-${mb}mb.bin`, buf)
+          log(`file send complete after resume: ${currentFileId}`, 'ok')
+        } catch (e) {
+          log(`resume error: ${e.message}`, 'err')
+        }
+      }
+
+      $('btn-ft-drop').onclick = () => {
+        ft.drop(currentFileId)
+        log(`dropped receiver buffer for ${currentFileId}`, 'warn')
+      }
+
       log(
         `joined room "demo" with maxPeers=2, iceReconnect=true (selfId ${selfId})`,
         'ok'
       )
-      log(
-        `open this URL in 2+ more tabs to see peers connect.`,
-        'info'
-      )
+      log(`open this URL in 2+ more tabs to see peers connect.`, 'info')
     </script>
   </body>
 </html>
