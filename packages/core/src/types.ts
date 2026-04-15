@@ -73,7 +73,7 @@ export type ProgressHandler = (
   percent: number,
   peerId: string,
   metadata?: JsonValue
-) => void
+) => void | boolean
 
 export type ActionSender<T extends DataPayload = DataPayload> = (
   data: T,

@@ -84,12 +84,16 @@ type ActionState = {
     peerId: string,
     metadata?: JsonValue
   ) => void
-  onProgress: (percent: number, peerId: string, metadata?: JsonValue) => void
+  onProgress: (
+    percent: number,
+    peerId: string,
+    metadata?: JsonValue
+  ) => void | boolean
   setOnComplete: (
     f: (payload: DataPayload, peerId: string, metadata?: JsonValue) => void
   ) => void
   setOnProgress: (
-    f: (percent: number, peerId: string, metadata?: JsonValue) => void
+    f: (percent: number, peerId: string, metadata?: JsonValue) => void | boolean
   ) => void
   send: ActionSender
   options: ActionOptions
@@ -98,6 +102,7 @@ type ActionState = {
 type PendingTransmission = {
   chunks: Uint8Array[]
   meta?: JsonValue
+  aborted?: boolean
 }
 
 type PendingActionPayload = {
@@ -138,6 +143,18 @@ type PendingMediaMeta = {
 type PendingPongWaiter = {
   resolve: () => void
   reject: (error: Error) => void
+}
+
+const buildAbortChunk = (type: string, nonce: number): Uint8Array => {
+  const chunk = new Uint8Array(payloadIndex)
+  const typeBytes = encodeBytes(type)
+  chunk.set(typeBytes)
+  chunk[nonceIndex] = (nonce >> 8) & oneByteMax
+  chunk[nonceIndex + 1] = nonce & oneByteMax
+  chunk[tagIndex] = 1 | (1 << 4)
+  chunk[progressIndex] = oneByteMax
+
+  return chunk
 }
 
 const toByteArray = (value: ArrayBuffer | ArrayBufferView): Uint8Array =>
@@ -224,6 +241,7 @@ export default (
     string,
     Record<string, Record<number, PendingTransmission>>
   > = {}
+  const cancelledOutgoing: Record<string, Record<string, Set<number>>> = {}
   const pendingActionPayloads: Record<string, PendingActionPayload[]> = {}
   const pendingPongs: Record<string, PendingPongWaiter[] | undefined> = {}
   const pendingStreamMetas: Record<string, PendingMediaMeta[]> = {}
@@ -351,6 +369,7 @@ export default (
     delete peerMap[id]
     delete activePeerMap[id]
     delete pendingTransmissions[id]
+    delete cancelledOutgoing[id]
     pendingPongs[id]?.splice(0).forEach(waiter => waiter.reject(err))
     delete pendingPongs[id]
     delete pendingStreamMetas[id]
@@ -436,7 +455,7 @@ export default (
         percent: number,
         peerId: string,
         metadata?: JsonValue
-      ) => void,
+      ) => void | boolean,
 
       setOnComplete: f => {
         actions[type]!.onComplete = f
@@ -521,6 +540,7 @@ export default (
           return chunk
         })
 
+        const currentNonce = nonce
         nonce = (nonce + 1) & twoByteMax
 
         await all(
@@ -556,11 +576,26 @@ export default (
                   break
                 }
 
+                if (cancelledOutgoing[id]?.[type]?.has(currentNonce)) {
+                  break
+                }
+
                 peer.sendData(chunk)
                 chunkN++
                 const progressByte = chunk[progressIndex] ?? oneByteMax
-                onProgress?.(progressByte / oneByteMax, id, meta)
+                const progressResult = onProgress?.(
+                  progressByte / oneByteMax,
+                  id,
+                  meta
+                )
+
+                if (progressResult === false) {
+                  peer.sendData(buildAbortChunk(type, currentNonce))
+                  break
+                }
               }
+
+              cancelledOutgoing[id]?.[type]?.delete(currentNonce)
             },
             {includePending: normalizedOptions.sendToPending}
           )
@@ -611,11 +646,32 @@ export default (
     const isMeta = Boolean(tag & (1 << 1))
     const isBinary = Boolean(tag & (1 << 2))
     const isJson = Boolean(tag & (1 << 3))
+    const isAbort = Boolean(tag & (1 << 4))
+
+    if (isAbort) {
+      ;((cancelledOutgoing[id] ??= {})[type] ??= new Set()).add(nonce)
+
+      const existing = pendingTransmissions[id]?.[type]?.[nonce]
+
+      if (existing) {
+        existing.chunks.length = 0
+        delete pendingTransmissions[id]![type]![nonce]
+      }
+
+      return
+    }
 
     pendingTransmissions[id] ??= {}
     pendingTransmissions[id][type] ??= {}
 
     const target = (pendingTransmissions[id][type][nonce] ??= {chunks: []})
+
+    if (target.aborted) {
+      if (isLast) {
+        delete pendingTransmissions[id][type][nonce]
+      }
+      return
+    }
 
     if (isMeta) {
       target.meta = fromJson<JsonValue>(decodeBytes(payload))
@@ -623,7 +679,26 @@ export default (
       target.chunks.push(payload)
     }
 
-    action?.onProgress(progress / oneByteMax, id, target.meta)
+    const progressResult = action?.onProgress(
+      progress / oneByteMax,
+      id,
+      target.meta
+    )
+
+    if (progressResult === false) {
+      target.chunks.length = 0
+      target.aborted = true
+
+      if (!type.startsWith('@_')) {
+        peerMap[id]?.sendData(buildAbortChunk(type, nonce))
+      }
+
+      if (isLast) {
+        delete pendingTransmissions[id][type][nonce]
+      }
+
+      return
+    }
 
     if (!isLast) {
       return
