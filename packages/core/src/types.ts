@@ -88,10 +88,21 @@ export type ActionReceiver<T extends DataPayload = DataPayload> = (
 
 export type ActionProgress = (progressHandler: ProgressHandler) => void
 
+export type RoomErrorCode = 'peer' | 'handshake' | 'action'
+
+export type RoomError = {
+  code: RoomErrorCode
+  peerId?: string
+  error: Error
+}
+
+export type RoomErrorHandler = (err: RoomError) => void
+
 export type Room = {
   makeAction: <T extends DataPayload = DataPayload>(
     namespace: string
   ) => [ActionSender<T>, ActionReceiver<T>, ActionProgress]
+  onError: (fn: RoomErrorHandler) => void
   ping: (id: string) => Promise<number>
   leave: () => Promise<void>
   getPeers: () => Record<string, RTCPeerConnection>

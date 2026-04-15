@@ -30,6 +30,8 @@ import type {
   PeerHandle,
   PeerHandshake,
   Room,
+  RoomError,
+  RoomErrorHandler,
   SharedMediaPeer,
   TargetPeers
 } from './types'
@@ -243,14 +245,28 @@ export default (
       stream: MediaStream,
       peerId: string,
       metadata?: JsonValue
-    ) => void
+    ) => void,
+    onError: noOp as RoomErrorHandler
+  }
+
+  let hasErrorListener = false
+
+  const emitError = (err: RoomError): void => {
+    try {
+      listeners.onError(err)
+    } catch (handlerErr) {
+      console.error(`${libName} onError handler threw:`, handlerErr)
+    }
   }
   let unregisterBeforeUnloadCleanup: () => void = noOp
 
   const iterate = (
     targets: TargetPeers,
     f: (id: string, peer: PeerHandle) => Promise<void> | void,
-    {includePending = false}: {includePending?: boolean} = {}
+    {
+      includePending = false,
+      actionType
+    }: {includePending?: boolean; actionType?: string} = {}
   ): Promise<void>[] =>
     (targets
       ? Array.isArray(targets)
@@ -261,7 +277,16 @@ export default (
       const peer = includePending ? peerMap[id] : activePeerMap[id]
 
       if (!peer) {
-        console.warn(`${libName}: no peer with id ${id} found`)
+        if (!actionType?.startsWith('@_')) {
+          const msg = `no peer with id ${id} found`
+
+          if (!hasErrorListener) {
+            console.warn(`${libName}: ${msg}`)
+          }
+
+          emitError({code: 'action', peerId: id, error: mkErr(msg)})
+        }
+
         return []
       }
 
@@ -562,7 +587,10 @@ export default (
                 onProgress?.(progressByte / oneByteMax, id, meta)
               }
             },
-            {includePending: normalizedOptions.sendToPending}
+            {
+              includePending: normalizedOptions.sendToPending,
+              actionType: type
+            }
           )
         )
 
@@ -735,6 +763,7 @@ export default (
     const error = toHandshakeErrorMessage(reason)
 
     onHandshakeError?.(id, error)
+    emitError({code: 'handshake', peerId: id, error: mkErr(error)})
     exitPeer(id, peer, mkErr(error))
   }
 
@@ -991,7 +1020,11 @@ export default (
       },
       close: () => exitPeer(id, peer, mkErr('peer disconnected')),
       error: (err: Error) => {
-        console.error(`${libName} peer error:`, err)
+        if (!hasErrorListener) {
+          console.error(`${libName} peer error:`, err)
+        }
+
+        emitError({code: 'peer', peerId: id, error: err})
         exitPeer(id, peer, err)
       }
     })
@@ -1095,6 +1128,11 @@ export default (
 
     onPeerStream: f => (listeners.onPeerStream = f),
 
-    onPeerTrack: f => (listeners.onPeerTrack = f)
+    onPeerTrack: f => (listeners.onPeerTrack = f),
+
+    onError: f => {
+      listeners.onError = f
+      hasErrorListener = true
+    }
   }
 }
