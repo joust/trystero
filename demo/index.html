@@ -380,8 +380,12 @@
         new Uint8Array(buf).fill(0xab)
         log(`file send: ${mb} MB as ${currentFileId}`, 'info')
         try {
-          await ft.send(currentFileId, `demo-${mb}mb.bin`, buf)
-          log(`file send complete: ${currentFileId}`, 'ok')
+          const result = await ft.send(currentFileId, `demo-${mb}mb.bin`, buf)
+          if (result?.aborted) {
+            log(`send superseded: ${currentFileId}`, 'warn')
+          } else {
+            log(`file send complete: ${currentFileId}`, 'ok')
+          }
         } catch (e) {
           log(`file send error: ${e.message}`, 'err')
         }
@@ -398,8 +402,12 @@
         new Uint8Array(buf).fill(0xab)
         log(`resuming ${currentFileId}: only missing chunks will go`, 'info')
         try {
-          await ft.send(currentFileId, `demo-${mb}mb.bin`, buf)
-          log(`file send complete after resume: ${currentFileId}`, 'ok')
+          const result = await ft.send(currentFileId, `demo-${mb}mb.bin`, buf)
+          if (result?.aborted) {
+            log(`resume superseded: ${currentFileId}`, 'warn')
+          } else {
+            log(`file send complete after resume: ${currentFileId}`, 'ok')
+          }
         } catch (e) {
           log(`resume error: ${e.message}`, 'err')
         }

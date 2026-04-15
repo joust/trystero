@@ -31,6 +31,15 @@ export const createFileTransfer = room => {
     if (!send) return
 
     const already = new Set(have)
+    send.sent = already.size
+    listeners.onProgress({
+      direction: 'send',
+      fileId,
+      peerId,
+      sent: send.sent,
+      total: send.total
+    })
+
     for (let i = 0; i < send.total; i++) {
       if (send.aborted) return
       if (already.has(i)) continue
@@ -93,7 +102,10 @@ export const createFileTransfer = room => {
   return {
     send: (fileId, name, buffer, targetPeers) => {
       const existing = pending.get(fileId)
-      if (existing) existing.aborted = true
+      if (existing) {
+        existing.aborted = true
+        existing.resolve({aborted: true})
+      }
 
       const total = Math.ceil(buffer.byteLength / CHUNK_SIZE) || 1
       const manifest = {
@@ -122,6 +134,7 @@ export const createFileTransfer = room => {
       if (s) {
         s.aborted = true
         pending.delete(fileId)
+        s.resolve({aborted: true})
       }
     },
 
