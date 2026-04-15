@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Trystero feature demo</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        max-width: 1100px;
+        margin: 1rem auto;
+        padding: 0 1rem;
+        background: #fafafa;
+        color: #222;
+      }
+      h1 {
+        font-size: 1.3rem;
+        margin: 0 0 0.3rem 0;
+      }
+      .sub {
+        color: #666;
+        font-size: 0.85rem;
+        margin-bottom: 1rem;
+      }
+      .me {
+        background: #eef;
+        padding: 0.4rem 0.6rem;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-right: 0.5rem;
+      }
+      .peers {
+        color: #555;
+        font-size: 0.85rem;
+      }
+      section {
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 0.8rem 1rem;
+        margin-bottom: 0.8rem;
+      }
+      section h2 {
+        margin: 0 0 0.3rem 0;
+        font-size: 1rem;
+      }
+      section p {
+        margin: 0.3rem 0;
+        font-size: 0.85rem;
+        color: #555;
+      }
+      button {
+        padding: 0.35rem 0.75rem;
+        border: 1px solid #888;
+        background: #f0f0f0;
+        border-radius: 3px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        margin-right: 0.3rem;
+        margin-top: 0.3rem;
+      }
+      button:hover {
+        background: #e0e0e0;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      input[type='text'],
+      input[type='number'] {
+        padding: 0.3rem;
+        border: 1px solid #aaa;
+        border-radius: 3px;
+        font-size: 0.85rem;
+        width: 100px;
+      }
+      #log {
+        background: #111;
+        color: #0f0;
+        font-family: monospace;
+        font-size: 0.75rem;
+        padding: 0.6rem;
+        border-radius: 4px;
+        height: 280px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+      }
+      .ok {
+        color: #0f0;
+      }
+      .warn {
+        color: #fc0;
+      }
+      .err {
+        color: #f66;
+      }
+      .info {
+        color: #6cf;
+      }
+      .bar {
+        background: #ddd;
+        height: 8px;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-top: 0.3rem;
+      }
+      .bar > div {
+        background: #48f;
+        height: 100%;
+        width: 0;
+        transition: width 0.1s;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Trystero feature demo</h1>
+    <div class="sub">
+      All four feature branches combined. Open this page in <b>2–3 tabs</b>
+      (same URL) to get peers connecting to each other.
+    </div>
+    <div>
+      <span class="me">self: <span id="self"></span></span>
+      <span class="me">room: demo</span>
+      <span class="peers">active peers: <span id="peers">0</span></span>
+    </div>
+
+    <section>
+      <h2>1. onError (#90)</h2>
+      <p>
+        Every error surfaces here. Press the button to simulate a send to a
+        non-existent peer — you should see an <b>action</b> error.
+      </p>
+      <button id="btn-ghost">send to ghost-peer</button>
+      <button id="btn-throw-handler">
+        install throwing onError (verify room still works)
+      </button>
+    </section>
+
+    <section>
+      <h2>2. stream-rejection (#125)</h2>
+      <p>
+        Open two tabs. On the sender tab, press "send big blob" — the receiver
+        aborts at ~30% by returning <code>false</code> from its progress
+        handler. Watch both bars and the log.
+      </p>
+      <label>size (KB): <input type="number" id="size" value="512" /></label>
+      <button id="btn-send-blob">send big blob to everyone</button>
+      <button id="btn-send-blob-full">
+        send big blob (no abort) — verify clean path
+      </button>
+      <div>
+        sender: <span id="sp">0%</span>
+        <div class="bar"><div id="sbar"></div></div>
+      </div>
+      <div>
+        receiver: <span id="rp">0%</span>
+        <div class="bar"><div id="rbar"></div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. maxPeers (#141)</h2>
+      <p>
+        This page joins with <code>maxPeers: 2</code>. Open a <b>3rd tab</b> —
+        the 3rd joiner should be rejected (log line, no onPeerJoin fires).
+      </p>
+    </section>
+
+    <section>
+      <h2>4. iceReconnect</h2>
+      <p>
+        Enabled via <code>iceReconnect: true</code>. With two tabs connected,
+        disable your Wi-Fi or use DevTools → Network → Offline for a few
+        seconds, then restore. You should see a reconnect log line rather than
+        a permanent peer-leave.
+      </p>
+      <button id="btn-simulate-disconnect">
+        force one of our RTC connections into 'disconnected' (dev-only)
+      </button>
+    </section>
+
+    <section>
+      <h2>Log</h2>
+      <div id="log"></div>
+    </section>
+
+    <script type="module">
+      import {joinRoom, selfId} from '../dist/trystero-nostr.min.js'
+
+      const $ = id => document.getElementById(id)
+      const log = (msg, cls = '') => {
+        const el = $('log')
+        const time = new Date().toLocaleTimeString()
+        const line = document.createElement('div')
+        line.className = cls
+        line.textContent = `[${time}] ${msg}`
+        el.appendChild(line)
+        el.scrollTop = el.scrollHeight
+      }
+
+      $('self').textContent = selfId
+
+      const config = {
+        appId: 'trystero-demo-' + location.host,
+        maxPeers: 2,
+        iceReconnect: true
+      }
+
+      const room = joinRoom(config, 'demo')
+
+      room.onError(e => {
+        log(
+          `onError [${e.code}] ${e.peerId ? `peer=${e.peerId} ` : ''}${e.error.message}`,
+          'err'
+        )
+      })
+
+      let peerCount = 0
+      const updatePeers = () => ($('peers').textContent = peerCount)
+
+      room.onPeerJoin(id => {
+        peerCount++
+        updatePeers()
+        log(`onPeerJoin ${id}`, 'ok')
+      })
+      room.onPeerLeave(id => {
+        peerCount--
+        updatePeers()
+        log(`onPeerLeave ${id}`, 'warn')
+      })
+
+      const [sendBlob, getBlob, onBlobProgress] = room.makeAction('blob')
+
+      getBlob((data, peerId, meta) => {
+        log(
+          `got blob from ${peerId}: ${data.byteLength} bytes (label=${meta?.label ?? '-'})`,
+          'ok'
+        )
+      })
+
+      let rejectNext = false
+      onBlobProgress((pct, peerId, meta) => {
+        $('rp').textContent = `${Math.round(pct * 100)}% from ${peerId}`
+        $('rbar').style.width = `${pct * 100}%`
+        if (rejectNext && pct > 0.3 && meta?.abortable) {
+          log(
+            `receiver aborting blob from ${peerId} at ${Math.round(pct * 100)}%`,
+            'warn'
+          )
+          return false
+        }
+      })
+
+      const makeBlob = sizeKb => {
+        const buf = new Uint8Array(sizeKb * 1024)
+        for (let i = 0; i < buf.length; i++) buf[i] = i & 0xff
+        return buf.buffer
+      }
+
+      $('btn-ghost').onclick = async () => {
+        const [send] = room.makeAction('ghost')
+        await send('hi', 'no-such-peer-' + Date.now())
+        log('(sent to ghost-peer; watch for onError action entry above)', 'info')
+      }
+
+      $('btn-throw-handler').onclick = () => {
+        room.onError(() => {
+          throw new Error('handler error (intentional)')
+        })
+        log(
+          'installed throwing onError handler — room should survive the next error',
+          'info'
+        )
+      }
+
+      $('btn-send-blob').onclick = async () => {
+        rejectNext = true
+        const size = Number($('size').value) || 512
+        log(`sending ${size}KB blob (receivers will abort at ~30%)`, 'info')
+        await sendBlob(
+          makeBlob(size),
+          undefined,
+          {label: 'abortable', abortable: true},
+          (pct, peerId) => {
+            $('sp').textContent = `${Math.round(pct * 100)}% to ${peerId}`
+            $('sbar').style.width = `${pct * 100}%`
+          }
+        )
+        log('sendBlob returned', 'info')
+      }
+
+      $('btn-send-blob-full').onclick = async () => {
+        rejectNext = false
+        const size = Number($('size').value) || 512
+        log(`sending ${size}KB blob (no abort)`, 'info')
+        await sendBlob(
+          makeBlob(size),
+          undefined,
+          {label: 'full', abortable: false},
+          (pct, peerId) => {
+            $('sp').textContent = `${Math.round(pct * 100)}% to ${peerId}`
+            $('sbar').style.width = `${pct * 100}%`
+          }
+        )
+        log('sendBlob returned', 'info')
+      }
+
+      $('btn-simulate-disconnect').onclick = () => {
+        const peers = room.getPeers()
+        const ids = Object.keys(peers)
+        if (!ids.length) {
+          log('no active peers to disrupt', 'warn')
+          return
+        }
+        const [id] = ids
+        const pc = peers[id]
+        log(
+          `closing RTC connection to ${id} (state=${pc.connectionState}) — watch for reconnect`,
+          'info'
+        )
+        try {
+          pc.getSenders?.()
+        } catch {}
+        pc.close()
+      }
+
+      log(
+        `joined room "demo" with maxPeers=2, iceReconnect=true (selfId ${selfId})`,
+        'ok'
+      )
+      log(
+        `open this URL in 2+ more tabs to see peers connect.`,
+        'info'
+      )
+    </script>
+  </body>
+</html>
