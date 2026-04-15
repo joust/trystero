@@ -130,6 +130,7 @@ type RoomOptions = {
   onPeerHandshake?: PeerHandshake
   onHandshakeError?: (peerId: string, error: string) => void
   handshakeTimeoutMs?: number
+  maxPeers?: number
 }
 
 type InternalMediaMeta = {
@@ -228,7 +229,8 @@ export default (
   {
     onPeerHandshake,
     onHandshakeError,
-    handshakeTimeoutMs = defaultHandshakeTimeoutMs
+    handshakeTimeoutMs = defaultHandshakeTimeoutMs,
+    maxPeers
   }: RoomOptions = {}
 ): Room => {
   const peerMap: Record<string, PeerHandle> = {}
@@ -1035,8 +1037,22 @@ export default (
     maybeActivatePeer(id)
   })
 
+  if (maxPeers !== undefined && (!Number.isInteger(maxPeers) || maxPeers < 0)) {
+    throw mkErr('maxPeers must be a non-negative integer')
+  }
+
   onPeer((peer, id) => {
     const existingPeer = peerMap[id]
+
+    if (
+      maxPeers !== undefined &&
+      !existingPeer &&
+      keys(peerMap).length >= maxPeers
+    ) {
+      peer.destroy()
+      onPeerLeave(id)
+      return
+    }
 
     if (existingPeer) {
       if (existingPeer === peer) {

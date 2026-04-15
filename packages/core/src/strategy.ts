@@ -201,6 +201,13 @@ export default <
       throw mkErr('handshakeTimeoutMs must be a positive number')
     }
 
+    if (
+      config.maxPeers !== undefined &&
+      (!Number.isInteger(config.maxPeers) || config.maxPeers < 0)
+    ) {
+      throw mkErr('maxPeers must be a non-negative integer')
+    }
+
     if (occupiedRooms[appId]?.[roomId]) {
       return occupiedRooms[appId][roomId]
     }
@@ -464,6 +471,7 @@ export default <
         ? {onPeerHandshake: composedPeerHandshake}
         : {}),
       ...(handshakeTimeoutMs === undefined ? {} : {handshakeTimeoutMs}),
+      ...(config.maxPeers === undefined ? {} : {maxPeers: config.maxPeers}),
       onHandshakeError: (peerId: string, error: string) =>
         onJoinError?.({
           error: error.replace(/^handshake failed: /, ''),
